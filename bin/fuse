@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly ENV_FILE="${FUSE_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fuse/env}"
+readonly SHARE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/fuse-code"
+readonly CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+readonly FUSE_SETTINGS="${FUSE_SETTINGS_FILE:-$CLAUDE_DIR/fuse/settings.json}"
+readonly USER_SETTINGS="$CLAUDE_DIR/settings.json"
+readonly FUSE_THEMES='["custom:fuse","custom:fuse-light"]'
+
+die() { printf 'fuse: %s\n' "$*" >&2; exit 1; }
+
+case "${1:-}" in
+  --refresh-models | --reset-models | --self-update | --uninstall)
+    [[ -r "$SHARE_DIR/install.sh" ]] || die "fuse-code files are missing. Clone the repo and run ./install.sh again."
+    exec bash "$SHARE_DIR/install.sh" "$1"
+    ;;
+esac
+
+[[ -r "$ENV_FILE" ]] || die "missing $ENV_FILE. Run ./install.sh from the fuse-code repo."
+[[ -r "$FUSE_SETTINGS" ]] || die "missing $FUSE_SETTINGS. Run fuse --refresh-models."
+
+. "$ENV_FILE"
+
+[[ -n "${FUSE_API_KEY:-}" ]] || die "FUSE_API_KEY is empty in $ENV_FILE."
+[[ -n "${FUSE_BASE_URL:-}" ]] || die "FUSE_BASE_URL is empty in $ENV_FILE."
+[[ -n "${FUSE_DEFAULT_MODEL:-}" ]] || die "FUSE_DEFAULT_MODEL is empty. Run fuse --refresh-models."
+
+CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
+if [[ -z "$CLAUDE_BIN" && -x "$HOME/.local/bin/claude" ]]; then
+  CLAUDE_BIN="$HOME/.local/bin/claude"
+fi
+[[ -n "$CLAUDE_BIN" ]] || die "Claude Code is not installed. See https://claude.ai/install.sh"
+
+unset ANTHROPIC_API_KEY CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
+export ANTHROPIC_BASE_URL="$FUSE_BASE_URL"
+export ANTHROPIC_AUTH_TOKEN="$FUSE_API_KEY"
+export ANTHROPIC_MODEL="$FUSE_DEFAULT_MODEL"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="$FUSE_DEFAULT_MODEL"
+export ANTHROPIC_DEFAULT_FABLE_MODEL="$FUSE_DEFAULT_MODEL"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="${FUSE_SONNET_MODEL:-$FUSE_DEFAULT_MODEL}"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="${FUSE_SMALL_MODEL:-$FUSE_DEFAULT_MODEL}"
+export ANTHROPIC_SMALL_FAST_MODEL="$ANTHROPIC_DEFAULT_HAIKU_MODEL"
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+unset FUSE_API_KEY FUSE_ENV_FILE FUSE_SETTINGS_FILE
+
+fuse_values() {
+  jq -c --argjson themes "$FUSE_THEMES" \
+    --arg main "$ANTHROPIC_MODEL" --arg sonnet "$ANTHROPIC_DEFAULT_SONNET_MODEL" --arg small "$ANTHROPIC_DEFAULT_HAIKU_MODEL" '
+    def base: sub("\\[1m\\]$"; "");
+    {model: ([.modelPicker.options[]?.model, $main, $sonnet, $small] | map(base) | unique), theme: $themes}' \
+    "$FUSE_SETTINGS"
+}
+
+user_choices() {
+  jq -c '{model, theme} | with_entries(select(.value != null))' "$USER_SETTINGS" 2>/dev/null || printf '{}'
+}
+
+guard_user_settings() {
+  local previous="$1" current updated tmp
+  [[ -n "$FUSE_VALUES" && -f "$USER_SETTINGS" ]] || return 0
+  current="$(jq . "$USER_SETTINGS" 2>/dev/null)" || return 0
+  updated="$(jq --argjson fuse "$FUSE_VALUES" --argjson previous "$previous" '
+    def base: sub("\\[1m\\]$"; "");
+    reduce ("model", "theme") as $key (.;
+      if (.[$key] | type) == "string" and ((.[$key] | base) as $value | $fuse[$key] | any(. == $value))
+      then (if $previous | has($key) then .[$key] = $previous[$key] else del(.[$key]) end)
+      else . end)' <<<"$current")" || return 0
+  [[ "$updated" != "$current" ]] || return 0
+  tmp="$(mktemp)" || return 0
+  printf '%s\n' "$updated" >"$tmp" && cat "$tmp" >"$USER_SETTINGS"
+  rm -f "$tmp"
+}
+
+FUSE_VALUES=""
+command -v jq >/dev/null && FUSE_VALUES="$(fuse_values 2>/dev/null || true)"
+guard_user_settings '{}'
+readonly BEFORE="$(user_choices)"
+trap 'guard_user_settings "$BEFORE"; exit 129' HUP
+trap 'guard_user_settings "$BEFORE"; exit 143' TERM
+
+status=0
+"$CLAUDE_BIN" --settings "$FUSE_SETTINGS" "$@" || status=$?
+guard_user_settings "$BEFORE"
+exit "$status"
