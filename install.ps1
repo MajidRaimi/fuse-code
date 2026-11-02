@@ -140,7 +140,7 @@ FUSE_DEFAULT_MODEL, FUSE_SONNET_MODEL, FUSE_SMALL_MODEL.
         if (-not (Confirm-Action 'Claude Code is not installed. Install it now with the official installer?')) {
             Stop-Installer 'Install Claude Code first (irm https://claude.ai/install.ps1 | iex) and run this again.'
         }
-        $exitCode = Invoke-WindowsPowerShell -ArgumentList @('-Command', 'irm https://claude.ai/install.ps1 | iex')
+        $exitCode = Invoke-WindowsPowerShell -ArgumentList @('-Command', '[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; irm https://claude.ai/install.ps1 | iex')
         if ($exitCode -ne 0 -or -not (Resolve-ClaudePath)) { Stop-Installer 'Claude Code still was not found after installing it.' }
     }
 
