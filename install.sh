@@ -14,9 +14,6 @@ readonly LAUNCHER="$BIN_DIR/fuse"
 readonly PROBE_LAUNCHER="$SHARE_DIR/bin/fuse"
 readonly PROBE_SECONDS=150
 readonly PROBE_PARALLEL=3
-readonly MAIN_PREFERENCE="moonshotai/Kimi-K3 zai-org/GLM-5.3-Flash deepseek-ai/DeepSeek-V4.1-Flash zai-org/GLM-5.2 MiniMaxAI/MiniMax-M3"
-readonly SONNET_PREFERENCE="zai-org/GLM-5.3-Flash moonshotai/Kimi-K3 deepseek-ai/DeepSeek-V4.1-Flash zai-org/GLM-5.2 MiniMaxAI/MiniMax-M3"
-readonly SMALL_PREFERENCE="Qwen/Qwen3.8-Flash-Next Qwen/Qwen3.6-35B-A3B deepseek-ai/DeepSeek-V4.1-Flash MiniMaxAI/MiniMax-M3 zai-org/GLM-5.3-Flash"
 
 readonly REQUESTED_KEY="${FUSE_API_KEY:-}"
 readonly REQUESTED_BASE_URL="${FUSE_BASE_URL:-}"
@@ -121,14 +118,14 @@ plan_models() {
   jq -n \
     --argjson models "$1" \
     --rawfile catalog "$SHARE_DIR/models.tsv" \
+    --rawfile slots "$SHARE_DIR/slots.tsv" \
     --arg main "$2" --arg sonnet "$3" --arg small "$4" --arg theme "$5" \
-    --argjson verified "$6" \
-    --arg main_preference "$MAIN_PREFERENCE" \
-    --arg sonnet_preference "$SONNET_PREFERENCE" \
-    --arg small_preference "$SMALL_PREFERENCE" '
+    --argjson verified "$6" '
     def base: sub("\\[1m\\]$"; "");
+    def rows($text): $text | split("\n") | map(sub("\r$"; "") | select(length > 0) | split("\t"));
     ($models.data | map({key: .id, value: .}) | from_entries) as $byId
-    | ($catalog | split("\n") | map(select(length > 0) | split("\t") | {id: .[0], label: .[1], summary: .[2]})) as $known
+    | (rows($catalog) | map({id: .[0], label: .[1], summary: .[2]})) as $known
+    | (rows($slots) | map({key: .[0], value: (.[1] | split(" "))}) | from_entries) as $preference
     | def context_of($id): ($byId[$id].max_model_len // $byId[$byId[$id].preset.model // ""].max_model_len // 0);
       def context_label($id): context_of($id) as $n
         | if $n >= 1000000 then "1M" elif $n > 0 then "\($n / 1000 | floor)k" else "unknown" end;
@@ -137,14 +134,14 @@ plan_models() {
       def chat_model($id): ($byId[$id].owned_by == "vllm")
         and (context_of($id) >= 200000)
         and ($id | test("embed|rerank|vision|translat|transcri|stt|tts|image|i2v|t2v"; "i") | not);
-      def pick($current; $preference):
+      def pick($current; $ranked):
         ($current | base) as $wanted
         | if $wanted != "" and usable($wanted) then $wanted
-          else first(($preference | split(" ")[]), $known[].id | select(usable(.))) // null end;
-    pick($main; $main_preference) as $main_id
+          else first(($ranked // [])[], $known[].id | select(usable(.))) // null end;
+    pick($main; $preference.main) as $main_id
     | if $main_id == null then error(if $verified == null then "none of the supported chat models are enabled for this key" else "no model passed the Claude Code check" end) else . end
-    | (pick($sonnet; $sonnet_preference) // $main_id) as $sonnet_id
-    | (pick($small; $small_preference) // $main_id) as $small_id
+    | (pick($sonnet; $preference.sonnet) // $main_id) as $sonnet_id
+    | (pick($small; $preference.small) // $main_id) as $small_id
     | ($known | map(.id)) as $known_ids
     | [
         ($known[] | select(usable(.id)) | {model: reference(.id), label, description: "Fuse, \(context_label(.id)) context, \(.summary)"}),
@@ -194,7 +191,7 @@ write_env() {
 copy_payload() {
   [[ "$SOURCE_DIR" == "$SHARE_DIR" ]] && return 0
   mkdir -p "$SHARE_DIR/bin" "$SHARE_DIR/themes"
-  cp "$SOURCE_DIR/install.sh" "$SOURCE_DIR/models.tsv" "$SHARE_DIR/"
+  cp "$SOURCE_DIR/install.sh" "$SOURCE_DIR/models.tsv" "$SOURCE_DIR/slots.tsv" "$SHARE_DIR/"
   cp "$SOURCE_DIR/bin/fuse" "$SHARE_DIR/bin/fuse"
   cp "$SOURCE_DIR/themes/"*.json "$SHARE_DIR/themes/"
   chmod +x "$SHARE_DIR/install.sh" "$SHARE_DIR/bin/fuse"
@@ -392,4 +389,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

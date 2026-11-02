@@ -1,0 +1,12 @@
+{
+  "data": [
+    { "id": "moonshotai/Kimi-K3", "owned_by": "vllm", "max_model_len": 1048576 },
+    { "id": "zai-org/GLM-5.3-Flash", "owned_by": "vllm", "max_model_len": 1048576 },
+    { "id": "deepseek-ai/DeepSeek-V4.1-Flash", "owned_by": "vllm", "max_model_len": 262144 },
+    { "id": "Qwen/Qwen3.8-Flash-Next", "owned_by": "vllm", "max_model_len": 262144 },
+    { "id": "tarjama/llmx-1.0", "owned_by": "vllm", "max_model_len": 262144 },
+    { "id": "acme/new-chat-9", "owned_by": "vllm", "max_model_len": 524288 },
+    { "id": "acme/embed-large", "owned_by": "vllm", "max_model_len": 524288 },
+    { "id": "@preset/team-coder", "owned_by": "fuse", "preset": { "model": "moonshotai/Kimi-K3", "name": "Team Coder" } }
+  ]
+}
