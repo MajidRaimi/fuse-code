@@ -63,7 +63,7 @@
     $ProbePrompt = 'Reply with the single word ok'
     $PayloadFiles = [string[]]@(
         'install.ps1', 'install.cmd', 'models.tsv', 'slots.tsv',
-        'bin\fuse.ps1', 'bin\fuse-guard.ps1', 'bin\fuse.cmd', 'lib\FuseCode.psm1',
+        'bin\fuse.ps1', 'bin\fuse-guard.ps1', 'bin\fuse.cmd', 'lib\FuseCode.psm1', 'lib\FuseLauncher.cs',
         'themes\fuse.json', 'themes\fuse-light.json'
     )
     $Requested = @{
@@ -78,6 +78,7 @@
     $Saved = Read-FuseEnv -Path $Paths.EnvFile
     $BinDir = Select-FirstValue @($Requested.BinDir, $Saved['FUSE_BIN_DIR'], $Paths.DefaultBinDir)
     $Launcher = [IO.Path]::Combine($BinDir, 'fuse.cmd')
+    $LauncherExecutable = [IO.Path]::Combine($BinDir, 'fuse.exe')
     $ProbeLauncher = [IO.Path]::Combine($Paths.ShareDir, 'bin', 'fuse.ps1')
 
     function Stop-Installer {
@@ -237,6 +238,7 @@ FUSE_DEFAULT_MODEL, FUSE_SONNET_MODEL, FUSE_SMALL_MODEL.
         $environment = @{
             FUSE_ENV_FILE      = [IO.Path]::Combine($probeDir, 'env')
             FUSE_SETTINGS_FILE = [IO.Path]::Combine($probeDir, 'settings.json')
+            FUSE_SKIP_SETTINGS_GUARD = '1'
         }
         $probes = New-Object System.Collections.Generic.List[object]
         try {
@@ -322,14 +324,29 @@ FUSE_DEFAULT_MODEL, FUSE_SONNET_MODEL, FUSE_SMALL_MODEL.
         (Test-Path -LiteralPath $Launcher -PathType Leaf) -and (Select-String -LiteralPath $Launcher -Pattern 'fuse-code' -SimpleMatch -Quiet)
     }
 
+    function Backup-ForeignLauncher {
+        param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][bool]$IsOwn)
+        if (-not (Test-Path -LiteralPath $Path) -or $IsOwn) { return }
+        $backup = "$Path.bak-$(Get-Date -Format yyyyMMddHHmmss)"
+        Move-Item -LiteralPath $Path -Destination $backup
+        Write-Note "Your previous fuse command was saved as $backup"
+    }
+
+    function Install-LauncherExecutable {
+        Backup-ForeignLauncher -Path $LauncherExecutable -IsOwn (Test-FuseExecutable -Path $LauncherExecutable)
+        try {
+            Install-FuseExecutable -SourcePath ([IO.Path]::Combine($Paths.ShareDir, 'lib', 'FuseLauncher.cs')) -Destination $LauncherExecutable
+        }
+        catch {
+            Write-Note "Could not build fuse.exe ($($_.Exception.Message)). Using fuse.cmd, which cannot pass & or line breaks in prompts."
+        }
+    }
+
     function Install-Launcher {
         [void][IO.Directory]::CreateDirectory($BinDir)
-        if ((Test-Path -LiteralPath $Launcher) -and -not (Test-OwnLauncher)) {
-            $backup = "$Launcher.bak-$(Get-Date -Format yyyyMMddHHmmss)"
-            Move-Item -LiteralPath $Launcher -Destination $backup
-            Write-Note "Your previous fuse command was saved as $backup"
-        }
+        Backup-ForeignLauncher -Path $Launcher -IsOwn (Test-OwnLauncher)
         Copy-Item -LiteralPath ([IO.Path]::Combine($Paths.ShareDir, 'bin', 'fuse.cmd')) -Destination $Launcher -Force
+        Install-LauncherExecutable
     }
 
     function Install-Themes {
@@ -390,6 +407,8 @@ FUSE_DEFAULT_MODEL, FUSE_SONNET_MODEL, FUSE_SMALL_MODEL.
         if (-not (Confirm-Action 'Remove fuse, its settings, themes and saved FUSE key?')) { Stop-Installer 'Cancelled.' }
         if (Test-Path -LiteralPath $ProbeLauncher) { [void](Invoke-WindowsPowerShell -ArgumentList @('-File', $ProbeLauncher, '--version') -Quiet) }
         if (Test-OwnLauncher) { Remove-Item -LiteralPath $Launcher -Force }
+        if (Test-FuseExecutable -Path $LauncherExecutable) { Move-Item -LiteralPath $LauncherExecutable -Destination "$LauncherExecutable.old-$(New-ShortToken)" }
+        if (Test-Path -LiteralPath $BinDir) { Remove-RetiredExecutables -Destination $LauncherExecutable }
         $leftovers = @(
             [IO.Path]::Combine($Paths.ClaudeDir, 'fuse'),
             $Paths.ShareDir,

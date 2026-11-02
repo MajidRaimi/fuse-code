@@ -20,6 +20,9 @@ $script:SettingChangeMessage = [uint32]0x1A
 $script:AbortIfHungFlag = [uint32]2
 $script:BroadcastTimeoutMilliseconds = [uint32]1000
 $script:CapturedTextTimeoutMilliseconds = 10000
+$script:LauncherProduct = 'fuse-code'
+$script:BatchExtensions = [string[]]@('.cmd', '.bat')
+$script:BatchPercentEscape = '%%cd:~,%'
 
 function Test-WindowsHost {
     [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
@@ -490,11 +493,84 @@ function ConvertTo-CommandLine {
     @($quoted) -join ' '
 }
 
+function ConvertFrom-CommandLine {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$CommandLine)
+    $arguments = New-Object System.Collections.Generic.List[string]
+    $current = New-Object System.Text.StringBuilder
+    $inQuotes = $false
+    $hasArgument = $false
+    $index = 0
+    while ($index -lt $CommandLine.Length) {
+        $character = $CommandLine[$index]
+        if ($character -eq [char]'\') {
+            $start = $index
+            while ($index -lt $CommandLine.Length -and $CommandLine[$index] -eq [char]'\') { $index++ }
+            $count = $index - $start
+            $quoteFollows = $index -lt $CommandLine.Length -and $CommandLine[$index] -eq [char]'"'
+            $literalCount = if ($quoteFollows) { [int](($count - ($count % 2)) / 2) } else { $count }
+            [void]$current.Append([char]'\', $literalCount)
+            if ($quoteFollows -and ($count % 2) -eq 1) {
+                [void]$current.Append([char]'"')
+                $index++
+            }
+            $hasArgument = $true
+        }
+        elseif ($character -eq [char]'"') {
+            if ($inQuotes -and ($index + 1) -lt $CommandLine.Length -and $CommandLine[$index + 1] -eq [char]'"') {
+                [void]$current.Append([char]'"')
+                $index += 2
+            }
+            else {
+                $inQuotes = -not $inQuotes
+                $index++
+            }
+            $hasArgument = $true
+        }
+        elseif (-not $inQuotes -and ($character -eq [char]' ' -or $character -eq [char]"`t")) {
+            if ($hasArgument) {
+                $arguments.Add($current.ToString())
+                [void]$current.Clear()
+                $hasArgument = $false
+            }
+            $index++
+        }
+        else {
+            [void]$current.Append($character)
+            $hasArgument = $true
+            $index++
+        }
+    }
+    if ($hasArgument) { $arguments.Add($current.ToString()) }
+    , [string[]]$arguments.ToArray()
+}
+
+function ConvertTo-BatchCommandLine {
+    param([AllowNull()][AllowEmptyCollection()][string[]]$ArgumentList)
+    if ($null -eq $ArgumentList) { return '' }
+    $quoted = foreach ($argument in $ArgumentList) {
+        if ($argument -match '[\r\n]') { throw [System.ArgumentException]::new('Claude Code is installed as a .cmd file, which cannot receive line breaks. Install the native Claude Code to pass multi-line prompts.') }
+        $escaped = (($argument -replace '(\\*)"', '$1$1""') -replace '(\\+)$', '$1$1').Replace('%', $script:BatchPercentEscape)
+        '"' + $escaped + '"'
+    }
+    @($quoted) -join ' '
+}
+
+function Test-BatchFile {
+    param([Parameter(Mandatory)][string]$FilePath)
+    $script:BatchExtensions -icontains [IO.Path]::GetExtension($FilePath)
+}
+
 function New-NativeStartInfo {
     param([Parameter(Mandatory)][string]$FilePath, [AllowNull()][AllowEmptyCollection()][string[]]$ArgumentList)
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $startInfo.FileName = $FilePath
-    $startInfo.Arguments = ConvertTo-CommandLine -ArgumentList $ArgumentList
+    if (Test-BatchFile -FilePath $FilePath) {
+        $startInfo.FileName = [IO.Path]::Combine($env:SystemRoot, 'System32', 'cmd.exe')
+        $startInfo.Arguments = '/d /e:ON /v:OFF /c ""' + $FilePath + '" ' + (ConvertTo-BatchCommandLine -ArgumentList $ArgumentList) + '"'
+    }
+    else {
+        $startInfo.FileName = $FilePath
+        $startInfo.Arguments = ConvertTo-CommandLine -ArgumentList $ArgumentList
+    }
     $startInfo.UseShellExecute = $false
     $startInfo
 }
@@ -568,6 +644,36 @@ function Stop-ProcessTree {
     [void](Wait-CapturedProcess -Captured (Start-CapturedProcess -FilePath $taskkill -ArgumentList @('/PID', [string]$ProcessId, '/T', '/F')))
 }
 
+function Test-FuseExecutable {
+    param([Parameter(Mandatory)][string]$Path)
+    (Test-Path -LiteralPath $Path -PathType Leaf) -and ((Get-Item -LiteralPath $Path).VersionInfo.ProductName -ceq $script:LauncherProduct)
+}
+
+function Remove-RetiredExecutables {
+    param([Parameter(Mandatory)][string]$Destination)
+    $directory = [IO.Path]::GetDirectoryName($Destination)
+    foreach ($retired in @(Get-ChildItem -LiteralPath $directory -Filter "$([IO.Path]::GetFileName($Destination)).old-*" -File)) {
+        try { Remove-Item -LiteralPath $retired.FullName -Force -ErrorAction Stop }
+        catch [System.UnauthorizedAccessException] { continue }
+        catch [System.IO.IOException] { continue }
+    }
+}
+
+function Install-FuseExecutable {
+    param([Parameter(Mandatory)][string]$SourcePath, [Parameter(Mandatory)][string]$Destination)
+    $token = New-ShortToken
+    $staging = [IO.Path]::Combine([IO.Path]::GetDirectoryName($Destination), "fuse-build-$token.exe")
+    try {
+        Add-Type -TypeDefinition ([IO.File]::ReadAllText($SourcePath)) -Language CSharp -OutputAssembly $staging -OutputType ConsoleApplication
+        if (Test-Path -LiteralPath $Destination) { Move-Item -LiteralPath $Destination -Destination "$Destination.old-$token" }
+        Move-Item -LiteralPath $staging -Destination $Destination
+    }
+    finally {
+        if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Force }
+    }
+    Remove-RetiredExecutables -Destination $Destination
+}
+
 function Resolve-ClaudePath {
     $commands = @(Get-Command -Name claude -CommandType Application -All -ErrorAction SilentlyContinue)
     $preferred = @($commands | Where-Object { $_.Extension -ieq '.exe' }) + $commands | Select-Object -First 1
@@ -619,6 +725,6 @@ Export-ModuleMember -Function @(
     'Get-ModelBase', 'Get-JsonProperty', 'ConvertTo-FuseJson', 'Read-JsonFile', 'Write-TextFile', 'Write-PrivateFile',
     'Read-FuseEnv', 'ConvertTo-FuseEnvText', 'Read-ModelCatalog', 'Read-SlotPreferences', 'New-ModelPlan',
     'New-SettingsGuard', 'Get-UserChoices', 'Restore-UserSettings', 'ConvertTo-GuardHandoff', 'ConvertFrom-GuardHandoff',
-    'ConvertTo-CommandLine', 'Invoke-NativeCommand', 'Start-CapturedProcess', 'Wait-CapturedProcess', 'Get-CapturedText',
+    'ConvertTo-CommandLine', 'ConvertFrom-CommandLine', 'ConvertTo-BatchCommandLine', 'Test-FuseExecutable', 'Install-FuseExecutable', 'Remove-RetiredExecutables', 'Send-EnvironmentChange', 'Invoke-NativeCommand', 'Start-CapturedProcess', 'Wait-CapturedProcess', 'Get-CapturedText',
     'Stop-ProcessTree', 'Resolve-ClaudePath', 'Test-PathListContains', 'Add-UserPathEntry'
 )

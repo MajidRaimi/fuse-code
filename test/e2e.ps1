@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $RepoDir = Split-Path -Parent $PSScriptRoot
+Import-Module ([IO.Path]::Combine($RepoDir, 'lib', 'FuseCode.psm1'))
 $MockKey = 'test-fuse-key'
 $WrongKey = 'wrong-key'
 $CommandTimeoutSeconds = 900
@@ -16,6 +17,10 @@ $RejectedModel = 'tarjama/llmx-1.0'
 $ExpectedOptionModels = 'moonshotai/Kimi-K3[1m],zai-org/GLM-5.3-Flash[1m],deepseek-ai/DeepSeek-V4.1-Flash,Qwen/Qwen3.8-Flash-Next,acme/new-chat-9'
 $PayloadItems = @('install.ps1', 'install.cmd', 'models.tsv', 'slots.tsv', 'bin', 'lib', 'themes')
 $WindowsPowerShell = [IO.Path]::Combine($env:SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+$PathBackupFile = [IO.Path]::Combine([IO.Path]::GetTempPath(), 'fuse-code-e2e-user-path.json')
+$WatchedSessionSeconds = 300
+$TrickyArguments = [string[]]@('-p', 'say "hi" & echo pwned | more', '', 'C:\dir with space\', '-x:true', '-y:', '50% %PATH% done', 'a^b<c>d', "tab`there", 'end\\"quote')
+$MultilinePrompt = "line one`nline two"
 
 $script:Passes = 0
 $script:Failures = 0
@@ -39,16 +44,11 @@ function Test-Case {
     }
 }
 
-function ConvertTo-ArgumentText {
-    param([AllowEmptyCollection()][string[]]$Arguments)
-    @($Arguments | ForEach-Object { if ($_ -eq '' -or $_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }) -join ' '
-}
-
 function Start-Captured {
-    param([Parameter(Mandatory)][string]$FilePath, [AllowEmptyCollection()][string[]]$Arguments = @(), [hashtable]$Environment = @{}, [string]$WorkingDirectory = $RepoDir)
+    param([Parameter(Mandatory)][string]$FilePath, [AllowEmptyCollection()][string[]]$Arguments = @(), [hashtable]$Environment = @{}, [string]$WorkingDirectory = $RepoDir, [string]$InputText = '')
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = $FilePath
-    $startInfo.Arguments = ConvertTo-ArgumentText -Arguments $Arguments
+    $startInfo.Arguments = ConvertTo-CommandLine -ArgumentList $Arguments
     $startInfo.UseShellExecute = $false
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
@@ -59,6 +59,7 @@ function Start-Captured {
         else { $startInfo.EnvironmentVariables[$entry.Key] = [string]$entry.Value }
     }
     $process = [System.Diagnostics.Process]::Start($startInfo)
+    if ($InputText) { $process.StandardInput.Write($InputText) }
     $process.StandardInput.Close()
     [pscustomobject]@{ Process = $process; Output = $process.StandardOutput.ReadToEndAsync(); Errors = $process.StandardError.ReadToEndAsync() }
 }
@@ -83,8 +84,8 @@ function Complete-Captured {
 }
 
 function Invoke-Captured {
-    param([Parameter(Mandatory)][string]$FilePath, [AllowEmptyCollection()][string[]]$Arguments = @(), [hashtable]$Environment = @{}, [string]$WorkingDirectory = $RepoDir, [int]$TimeoutSeconds = $CommandTimeoutSeconds)
-    Complete-Captured -Started (Start-Captured -FilePath $FilePath -Arguments $Arguments -Environment $Environment -WorkingDirectory $WorkingDirectory) -TimeoutSeconds $TimeoutSeconds
+    param([Parameter(Mandatory)][string]$FilePath, [AllowEmptyCollection()][string[]]$Arguments = @(), [hashtable]$Environment = @{}, [string]$WorkingDirectory = $RepoDir, [int]$TimeoutSeconds = $CommandTimeoutSeconds, [string]$InputText = '')
+    Complete-Captured -Started (Start-Captured -FilePath $FilePath -Arguments $Arguments -Environment $Environment -WorkingDirectory $WorkingDirectory -InputText $InputText) -TimeoutSeconds $TimeoutSeconds
 }
 
 function Format-Transcript {
@@ -154,8 +155,8 @@ function Read-UserSettingsText {
 }
 
 function Invoke-Fuse {
-    param([AllowEmptyCollection()][string[]]$Arguments, [hashtable]$Environment = @{}, [int]$TimeoutSeconds = $CommandTimeoutSeconds)
-    Invoke-Captured -FilePath $FuseCommand -Arguments $Arguments -Environment $Environment -WorkingDirectory $ProjectDir -TimeoutSeconds $TimeoutSeconds
+    param([AllowEmptyCollection()][string[]]$Arguments, [hashtable]$Environment = @{}, [int]$TimeoutSeconds = $CommandTimeoutSeconds, [string]$Launcher = $FuseExecutable, [string]$InputText = '')
+    Invoke-Captured -FilePath $Launcher -Arguments $Arguments -Environment $Environment -WorkingDirectory $ProjectDir -TimeoutSeconds $TimeoutSeconds -InputText $InputText
 }
 
 function Invoke-Installer {
@@ -187,14 +188,20 @@ function Read-UserPathValue {
     try { [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) } finally { $key.Close() }
 }
 
-function Save-UserPath {
+function Read-UserPathEntry {
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
     try {
         $value = $key.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-        $kind = if ($null -ne $value) { $key.GetValueKind('Path') } else { $null }
+        $kind = if ($null -ne $value) { [int]$key.GetValueKind('Path') } else { $null }
         [pscustomobject]@{ Value = $value; Kind = $kind }
     }
     finally { $key.Close() }
+}
+
+function Save-UserPath {
+    $saved = Read-UserPathEntry
+    [IO.File]::WriteAllText($PathBackupFile, (ConvertTo-Json -InputObject $saved -Compress))
+    $saved
 }
 
 function Restore-UserPath {
@@ -202,9 +209,17 @@ function Restore-UserPath {
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
     try {
         if ($null -eq $Saved.Value) { $key.DeleteValue('Path', $false) }
-        else { $key.SetValue('Path', $Saved.Value, $Saved.Kind) }
+        else { $key.SetValue('Path', [string]$Saved.Value, [Microsoft.Win32.RegistryValueKind][int]$Saved.Kind) }
     }
     finally { $key.Close() }
+    Send-EnvironmentChange
+    Remove-Item -LiteralPath $PathBackupFile -Force -ErrorAction SilentlyContinue
+}
+
+function Restore-InterruptedUserPath {
+    if (-not (Test-Path -LiteralPath $PathBackupFile -PathType Leaf)) { return }
+    Write-Host "e2e: restoring the user PATH saved by an interrupted run"
+    Restore-UserPath -Saved ([IO.File]::ReadAllText($PathBackupFile) | ConvertFrom-Json)
 }
 
 function New-PayloadArchive {
@@ -216,18 +231,40 @@ function New-PayloadArchive {
     [IO.Compression.ZipFile]::CreateFromDirectory($root, $Destination, [IO.Compression.CompressionLevel]::Optimal, $true)
 }
 
-function New-FakeClaude {
-    $fakeBin = [IO.Path]::Combine($WorkDir, 'fake bin')
-    [void][IO.Directory]::CreateDirectory($fakeBin)
-    [IO.File]::WriteAllText([IO.Path]::Combine($fakeBin, 'claude.cmd'), "@`"$WindowsPowerShell`" -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"%~dp0fake-claude.ps1`" %*`r`n")
-    $script = @(
-        '[IO.File]::WriteAllText([IO.Path]::Combine($env:USERPROFILE, ''fake-claude-args.json''), (ConvertTo-Json -InputObject @($args) -Compress))'
-        '$settings = [IO.Path]::Combine($env:USERPROFILE, ''.claude'', ''settings.json'')'
-        "[IO.File]::WriteAllText(`$settings, '{`"theme`":`"dark`",`"model`":`"$DefaultMain`"}')"
-        'Start-Sleep -Seconds 300'
-    ) -join "`r`n"
-    [IO.File]::WriteAllText([IO.Path]::Combine($fakeBin, 'fake-claude.ps1'), $script)
-    $fakeBin
+function New-FakeClaudeDirectories {
+    $exeDir = [IO.Path]::Combine($WorkDir, 'fake exe claude')
+    $cmdDir = [IO.Path]::Combine($WorkDir, 'fake cmd claude')
+    [void][IO.Directory]::CreateDirectory($exeDir)
+    [void][IO.Directory]::CreateDirectory($cmdDir)
+    $fakeExe = [IO.Path]::Combine($exeDir, 'claude.exe')
+    Add-Type -TypeDefinition ([IO.File]::ReadAllText([IO.Path]::Combine($PSScriptRoot, 'fixtures', 'FakeClaude.cs'))) -Language CSharp -OutputAssembly $fakeExe -OutputType ConsoleApplication
+    Copy-Item -LiteralPath $fakeExe -Destination ([IO.Path]::Combine($cmdDir, 'fake-claude.exe'))
+    [IO.File]::WriteAllText([IO.Path]::Combine($cmdDir, 'claude.cmd'), "@`"%~dp0fake-claude.exe`" %*`r`n")
+    [pscustomobject]@{ Exe = $exeDir; Cmd = $cmdDir }
+}
+
+function Get-IsolatedPath {
+    param([Parameter(Mandatory)][string]$ClaudeDir)
+    @($ClaudeDir, [IO.Path]::Combine($env:SystemRoot, 'System32'), $env:SystemRoot, [IO.Path]::Combine($env:SystemRoot, 'System32', 'Wbem'), [IO.Path]::GetDirectoryName($WindowsPowerShell)) -join ';'
+}
+
+function Get-FakeClaudeEnvironment {
+    param([Parameter(Mandatory)][string]$ClaudeDir, [int]$Seconds = 0)
+    @{ PATH = (Get-IsolatedPath -ClaudeDir $ClaudeDir); FAKE_CLAUDE_MODEL = $DefaultMain; FAKE_CLAUDE_SECONDS = [string]$Seconds }
+}
+
+function Read-FakeClaudeArguments {
+    $commandLine = [IO.File]::ReadAllText([IO.Path]::Combine($TestHome, 'fake-claude-command-line.txt'))
+    $parsed = ConvertFrom-CommandLine -CommandLine $commandLine
+    , [string[]]@($parsed | Select-Object -Skip 1)
+}
+
+function Assert-ClaudeReceived {
+    param([Parameter(Mandatory)][AllowEmptyString()][AllowEmptyCollection()][string[]]$Expected)
+    $received = Read-FakeClaudeArguments
+    $expectedJson = ConvertTo-Json -InputObject (@('--settings', $FuseSettings) + $Expected) -Compress
+    $receivedJson = ConvertTo-Json -InputObject $received -Compress
+    Assert-True ($receivedJson -ceq $expectedJson) "claude received $receivedJson, expected $expectedJson"
 }
 
 function Start-MockFuse {
@@ -264,17 +301,20 @@ $env:NO_PROXY = '127.0.0.1,localhost'
 
 $BinDir = [IO.Path]::Combine($TestHome, '.local', 'bin')
 $FuseCommand = [IO.Path]::Combine($BinDir, 'fuse.cmd')
+$FuseExecutable = [IO.Path]::Combine($BinDir, 'fuse.exe')
 $EnvFile = [IO.Path]::Combine($TestHome, '.config', 'fuse', 'env')
 $FuseSettings = [IO.Path]::Combine($TestHome, '.claude', 'fuse', 'settings.json')
 $UserSettings = [IO.Path]::Combine($TestHome, '.claude', 'settings.json')
 $ArchivePath = [IO.Path]::Combine($WorkDir, 'fuse-code.zip')
 $MockPort = Get-FreePort
 $MockUrl = "http://127.0.0.1:$MockPort"
+Restore-InterruptedUserPath
 $SavedUserPath = Save-UserPath
 $Mock = $null
 
 try {
     New-PayloadArchive -Destination $ArchivePath
+    $FakeClaude = New-FakeClaudeDirectories
     $Mock = Start-MockFuse
     Write-Host "e2e: mock FUSE at $MockUrl, home at $TestHome, $(& claude --version)"
 
@@ -315,9 +355,11 @@ try {
         }
     }
 
-    Test-Case 'fuse.cmd is installed and the bin folder is on the user PATH' {
+    Test-Case 'fuse.exe and fuse.cmd are installed and the bin folder is on the user PATH' {
         Assert-True (Test-Path -LiteralPath $FuseCommand) "$FuseCommand does not exist"
         Assert-True ([IO.File]::ReadAllText($FuseCommand).Contains('fuse-code')) 'fuse.cmd is not the fuse-code launcher'
+        Assert-True (Test-FuseExecutable -Path $FuseExecutable) "$FuseExecutable is missing or is not the fuse-code launcher"
+        Assert-True (@(Get-ChildItem -LiteralPath $BinDir -Filter 'fuse-build-*').Count -eq 0) 'a fuse.exe build file was left behind'
         $userPath = Read-UserPathValue
         Assert-True (@($userPath.Split(';') | Where-Object { $_.TrimEnd('\') -ieq $BinDir }).Count -eq 1) "user PATH is $userPath"
     }
@@ -326,6 +368,32 @@ try {
         $session = Invoke-Fuse -Arguments @('-p', 'Reply with the single word ok') -TimeoutSeconds $SessionTimeoutSeconds
         Assert-Succeeded $session 'fuse -p'
         Assert-True (@($session.Output -split "`r?`n") -ccontains 'ok') "fuse -p did not print ok, $(Format-Transcript $session)"
+    }
+
+    Test-Case 'fuse -p reads the prompt piped into fuse.exe' {
+        $session = Invoke-Fuse -Arguments @('-p') -InputText 'Reply with the single word ok' -TimeoutSeconds $SessionTimeoutSeconds
+        Assert-Succeeded $session 'piped fuse -p'
+        Assert-True (@($session.Output -split "`r?`n") -ccontains 'ok') "piped fuse -p did not print ok, $(Format-Transcript $session)"
+    }
+
+    Test-Case 'fuse.exe hands claude every argument unchanged' {
+        Write-UserSettings '{"theme":"dark"}'
+        $arguments = $TrickyArguments + $MultilinePrompt
+        Assert-Succeeded (Invoke-Fuse -Arguments $arguments -Environment (Get-FakeClaudeEnvironment -ClaudeDir $FakeClaude.Exe)) 'fuse.exe with tricky arguments'
+        Assert-ClaudeReceived -Expected $arguments
+        $settings = Read-UserSettingsText | ConvertFrom-Json
+        Assert-True ($settings.theme -ceq 'dark' -and $null -eq $settings.PSObject.Properties['model']) "the guard did not clean up after the session: $(Read-UserSettingsText)"
+    }
+
+    Test-Case 'a .cmd claude install receives every argument unchanged' {
+        Assert-Succeeded (Invoke-Fuse -Arguments $TrickyArguments -Environment (Get-FakeClaudeEnvironment -ClaudeDir $FakeClaude.Cmd)) 'fuse.exe with a .cmd claude'
+        Assert-ClaudeReceived -Expected $TrickyArguments
+    }
+
+    Test-Case 'a .cmd claude install refuses multi-line prompts with a clear error' {
+        $refused = Invoke-Fuse -Arguments @('-p', $MultilinePrompt) -Environment (Get-FakeClaudeEnvironment -ClaudeDir $FakeClaude.Cmd)
+        Assert-True ($refused.ExitCode -ne 0) "the multi-line prompt was accepted, $(Format-Transcript $refused)"
+        Assert-Contains $refused 'cannot receive line breaks'
     }
 
     Test-Case 'guard removes fuse model and theme left in user settings' {
@@ -346,13 +414,10 @@ try {
 
     Test-Case 'settings watcher restores user settings after the launcher is killed' {
         Write-UserSettings '{"theme":"dark"}'
-        $fakeBin = New-FakeClaude
-        $isolatedPath = @($fakeBin, [IO.Path]::Combine($env:SystemRoot, 'System32'), $env:SystemRoot, [IO.Path]::Combine($env:SystemRoot, 'System32', 'Wbem'), [IO.Path]::GetDirectoryName($WindowsPowerShell)) -join ';'
-        $session = Start-Captured -FilePath $FuseCommand -Environment @{ PATH = $isolatedPath } -WorkingDirectory $ProjectDir
+        $session = Start-Captured -FilePath $FuseExecutable -Environment (Get-FakeClaudeEnvironment -ClaudeDir $FakeClaude.Exe -Seconds $WatchedSessionSeconds) -WorkingDirectory $ProjectDir
         try {
             Wait-Until -TimeoutSeconds 90 -Message "the fake claude never picked a fuse model, user settings are $(Read-UserSettingsText)" -Condition { (Read-UserSettingsText).Contains('Kimi') }
-            $claudeArguments = [string[]](ConvertFrom-Json -InputObject ([IO.File]::ReadAllText([IO.Path]::Combine($TestHome, 'fake-claude-args.json'))))
-            Assert-True ($claudeArguments.Count -ge 2 -and $claudeArguments[0] -ceq '--settings' -and $claudeArguments[1] -ceq $FuseSettings) "claude was started with $($claudeArguments -join ' ')"
+            Assert-ClaudeReceived -Expected @()
             $tree = @(Get-ProcessTree -RootId $session.Process.Id)
             $watcher = Find-ProcessByCommandLine -Processes $tree -Pattern 'fuse-guard\.ps1'
             $launcher = Find-ProcessByCommandLine -Processes $tree -Pattern '\\bin\\fuse\.ps1'
@@ -379,7 +444,7 @@ try {
     }
 
     Test-Case 'refresh with a wrong key is rejected through fuse.cmd and keeps the saved key' {
-        $refresh = Invoke-Fuse -Arguments @('--refresh-models') -Environment @{ FUSE_API_KEY = $WrongKey }
+        $refresh = Invoke-Fuse -Arguments @('--refresh-models') -Environment @{ FUSE_API_KEY = $WrongKey } -Launcher $FuseCommand
         Assert-True ($refresh.ExitCode -ne 0) "fuse --refresh-models succeeded with a wrong key, $(Format-Transcript $refresh)"
         Assert-Contains $refresh 'rejected'
         Assert-EnvValue -Name 'FUSE_API_KEY' -Expected $MockKey

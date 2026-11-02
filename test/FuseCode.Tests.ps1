@@ -141,6 +141,36 @@ try {
         ((ConvertTo-CommandLine -ArgumentList @()) -ceq '') -and ((ConvertTo-CommandLine -ArgumentList $null) -ceq '')
     }
 
+    Test-Case 'command lines parse back into the exact arguments' {
+        $arguments = [string[]]@('-p', 'say "hi" & echo pwned', '', 'C:\dir with space\', 'end\\"quote', '-x:true', "line one`nline two", "tab`there", '\\server\share')
+        $parsed = ConvertFrom-CommandLine -CommandLine (ConvertTo-CommandLine -ArgumentList $arguments)
+        (ConvertTo-Json -InputObject $parsed -Compress) -ceq (ConvertTo-Json -InputObject $arguments -Compress)
+    }
+
+    Test-Case 'command line parsing follows the msvcrt rules' {
+        $parsed = ConvertFrom-CommandLine -CommandLine 'one  "two three" "" a\\"b c" d\e "x""y"'
+        (ConvertTo-Json -InputObject $parsed -Compress) -ceq '["one","two three","","a\\b c","d\\e","x\"y"]'
+    }
+
+    Test-Case 'an empty command line has no arguments' {
+        (ConvertFrom-CommandLine -CommandLine '   ').Count -eq 0
+    }
+
+    Test-Case 'batch command lines quote cmd metacharacters, quotes and percent signs' {
+        $line = ConvertTo-BatchCommandLine -ArgumentList @('a', 'say "hi" & x', '50%', 'C:\d\', '')
+        $line -ceq '"a" "say ""hi"" & x" "50%%cd:~,%" "C:\d\\" ""'
+    }
+
+    Test-Case 'batch command lines refuse line breaks' {
+        try {
+            [void](ConvertTo-BatchCommandLine -ArgumentList @("a`nb"))
+            $false
+        }
+        catch [System.ArgumentException] {
+            $_.Exception.Message.Contains('cannot receive line breaks')
+        }
+    }
+
     Test-Case 'env files round trip without leaving staging files' {
         $envPath = [IO.Path]::Combine($WorkDir, 'config', 'env')
         Write-PrivateFile -Path $envPath -Content (ConvertTo-FuseEnvText -Values ([ordered]@{ FUSE_API_KEY = 'k=1'; FUSE_DEFAULT_MODEL = 'moonshotai/Kimi-K3[1m]'; FUSE_SONNET_MODEL = '' }))
