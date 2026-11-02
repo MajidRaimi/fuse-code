@@ -221,6 +221,7 @@ function New-FakeClaude {
     [void][IO.Directory]::CreateDirectory($fakeBin)
     [IO.File]::WriteAllText([IO.Path]::Combine($fakeBin, 'claude.cmd'), "@`"$WindowsPowerShell`" -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"%~dp0fake-claude.ps1`" %*`r`n")
     $script = @(
+        '[IO.File]::WriteAllText([IO.Path]::Combine($env:USERPROFILE, ''fake-claude-args.json''), (ConvertTo-Json -InputObject @($args) -Compress))'
         '$settings = [IO.Path]::Combine($env:USERPROFILE, ''.claude'', ''settings.json'')'
         "[IO.File]::WriteAllText(`$settings, '{`"theme`":`"dark`",`"model`":`"$DefaultMain`"}')"
         'Start-Sleep -Seconds 300'
@@ -350,6 +351,8 @@ try {
         $session = Start-Captured -FilePath $FuseCommand -Environment @{ PATH = $isolatedPath } -WorkingDirectory $ProjectDir
         try {
             Wait-Until -TimeoutSeconds 90 -Message "the fake claude never picked a fuse model, user settings are $(Read-UserSettingsText)" -Condition { (Read-UserSettingsText).Contains('Kimi') }
+            $claudeArguments = @([IO.File]::ReadAllText([IO.Path]::Combine($TestHome, 'fake-claude-args.json')) | ConvertFrom-Json)
+            Assert-True ($claudeArguments.Count -ge 2 -and $claudeArguments[0] -ceq '--settings' -and $claudeArguments[1] -ceq $FuseSettings) "claude was started with $($claudeArguments -join ' ')"
             $tree = @(Get-ProcessTree -RootId $session.Process.Id)
             $watcher = Find-ProcessByCommandLine -Processes $tree -Pattern 'fuse-guard\.ps1'
             $launcher = Find-ProcessByCommandLine -Processes $tree -Pattern '\\bin\\fuse\.ps1'

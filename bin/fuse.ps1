@@ -102,7 +102,7 @@ if ($mayChangeChoices) { Invoke-SettingsCheck -Path $guard.Path -Action { Start-
 Set-SessionEnvironment -Config $config -Slots $slots
 $status = 1
 try {
-    $status = Invoke-NativeCommand -FilePath $claude -ArgumentList $arguments
+    $status = Invoke-NativeCommand -FilePath $claude -ArgumentList (@('--settings', $fuseSettings) + $arguments)
 }
 finally {
     Invoke-SettingsCheck -Path $guard.Path -Action { Restore-UserSettings -Guard $guard -Previous $before }

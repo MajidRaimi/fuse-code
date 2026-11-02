@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $script:FuseThemes = [string[]]@('custom:fuse', 'custom:fuse-light')
