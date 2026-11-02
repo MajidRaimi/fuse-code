@@ -23,6 +23,7 @@ $script:CapturedTextTimeoutMilliseconds = 10000
 $script:LauncherProduct = 'fuse-code'
 $script:BatchExtensions = [string[]]@('.cmd', '.bat')
 $script:BatchPercentEscape = '%%cd:~,%'
+$script:CmdLineLimit = 8191
 
 function Test-WindowsHost {
     [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
@@ -566,6 +567,7 @@ function New-NativeStartInfo {
     if (Test-BatchFile -FilePath $FilePath) {
         $startInfo.FileName = [IO.Path]::Combine($env:SystemRoot, 'System32', 'cmd.exe')
         $startInfo.Arguments = '/d /e:ON /v:OFF /c ""' + $FilePath + '" ' + (ConvertTo-BatchCommandLine -ArgumentList $ArgumentList) + '"'
+        if ($startInfo.Arguments.Length -gt $script:CmdLineLimit) { throw [System.ArgumentException]::new("The prompt is too long for a .cmd Claude Code install, which Command Prompt limits to $($script:CmdLineLimit) characters. Shorten it or install the native Claude Code.") }
     }
     else {
         $startInfo.FileName = $FilePath

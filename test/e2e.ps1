@@ -254,14 +254,18 @@ function Get-FakeClaudeEnvironment {
 }
 
 function Read-FakeClaudeArguments {
-    $commandLine = [IO.File]::ReadAllText([IO.Path]::Combine($TestHome, 'fake-claude-command-line.txt'))
-    $parsed = ConvertFrom-CommandLine -CommandLine $commandLine
-    , [string[]]@($parsed | Select-Object -Skip 1)
+    param([Parameter(Mandatory)][ValidateSet('Windows', 'Ucrt')][string]$Decoder)
+    if ($Decoder -ceq 'Ucrt') {
+        $parsed = ConvertFrom-CommandLine -CommandLine ([IO.File]::ReadAllText([IO.Path]::Combine($TestHome, 'fake-claude-command-line.txt')))
+        return , [string[]]@($parsed | Select-Object -Skip 1)
+    }
+    $lines = @([IO.File]::ReadAllLines([IO.Path]::Combine($TestHome, 'fake-claude-argv.txt')) | Where-Object { $_ })
+    , [string[]]@($lines | ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) })
 }
 
 function Assert-ClaudeReceived {
-    param([Parameter(Mandatory)][AllowEmptyString()][AllowEmptyCollection()][string[]]$Expected)
-    $received = Read-FakeClaudeArguments
+    param([Parameter(Mandatory)][AllowEmptyString()][AllowEmptyCollection()][string[]]$Expected, [ValidateSet('Windows', 'Ucrt')][string]$Decoder = 'Windows')
+    $received = Read-FakeClaudeArguments -Decoder $Decoder
     $expectedJson = ConvertTo-Json -InputObject (@('--settings', $FuseSettings) + $Expected) -Compress
     $receivedJson = ConvertTo-Json -InputObject $received -Compress
     Assert-True ($receivedJson -ceq $expectedJson) "claude received $receivedJson, expected $expectedJson"
@@ -387,7 +391,7 @@ try {
 
     Test-Case 'a .cmd claude install receives every argument unchanged' {
         Assert-Succeeded (Invoke-Fuse -Arguments $TrickyArguments -Environment (Get-FakeClaudeEnvironment -ClaudeDir $FakeClaude.Cmd)) 'fuse.exe with a .cmd claude'
-        Assert-ClaudeReceived -Expected $TrickyArguments
+        Assert-ClaudeReceived -Expected $TrickyArguments -Decoder Ucrt
     }
 
     Test-Case 'a .cmd claude install refuses multi-line prompts with a clear error' {

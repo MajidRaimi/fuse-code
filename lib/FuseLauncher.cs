@@ -14,9 +14,9 @@ public static class FuseLauncher
     public static int Main()
     {
         Console.CancelKeyPress += IgnoreCancel;
+        Environment.SetEnvironmentVariable(ArgumentsVariable, ArgumentsMarker + ArgumentTail(Environment.CommandLine));
         ProcessStartInfo startInfo = new ProcessStartInfo(WindowsPowerShellPath(), HostArguments(LauncherScriptPath()));
         startInfo.UseShellExecute = false;
-        startInfo.EnvironmentVariables[ArgumentsVariable] = ArgumentsMarker + ArgumentTail(Environment.CommandLine);
         using (Process launcher = Process.Start(startInfo))
         {
             launcher.WaitForExit();
@@ -26,7 +26,7 @@ public static class FuseLauncher
 
     private static void IgnoreCancel(object sender, ConsoleCancelEventArgs cancel)
     {
-        cancel.Cancel = true;
+        if (cancel.SpecialKey == ConsoleSpecialKey.ControlC) cancel.Cancel = true;
     }
 
     private static string WindowsPowerShellPath()

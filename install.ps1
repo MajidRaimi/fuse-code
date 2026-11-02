@@ -58,6 +58,7 @@
     $Paths = Get-FusePaths
     $DefaultBaseUrl = 'https://api.fuse.humainaic.com'
     $ModelListTimeoutSeconds = 30
+    $RetiredDeleteDelaySeconds = 6
     $ProbeSeconds = 150
     $ProbeParallel = 3
     $ProbePrompt = 'Reply with the single word ok'
@@ -403,12 +404,21 @@ FUSE_DEFAULT_MODEL, FUSE_SONNET_MODEL, FUSE_SMALL_MODEL.
         exit (Install-FromArchive -Forwarded @())
     }
 
+    function Remove-RetiredExecutablesLater {
+        if (-not (Test-Path -LiteralPath $BinDir)) { return }
+        $pattern = [IO.Path]::Combine($BinDir, 'fuse.exe.old-*')
+        if (-not (Test-Path -Path $pattern)) { return }
+        $cmd = [IO.Path]::Combine($env:SystemRoot, 'System32', 'cmd.exe')
+        Start-Process -FilePath $cmd -ArgumentList "/d /c ping -n $RetiredDeleteDelaySeconds 127.0.0.1 >NUL & del /f /q `"$pattern`"" -WindowStyle Hidden
+    }
+
     function Uninstall-Fuse {
         if (-not (Confirm-Action 'Remove fuse, its settings, themes and saved FUSE key?')) { Stop-Installer 'Cancelled.' }
         if (Test-Path -LiteralPath $ProbeLauncher) { [void](Invoke-WindowsPowerShell -ArgumentList @('-File', $ProbeLauncher, '--version') -Quiet) }
         if (Test-OwnLauncher) { Remove-Item -LiteralPath $Launcher -Force }
         if (Test-FuseExecutable -Path $LauncherExecutable) { Move-Item -LiteralPath $LauncherExecutable -Destination "$LauncherExecutable.old-$(New-ShortToken)" }
         if (Test-Path -LiteralPath $BinDir) { Remove-RetiredExecutables -Destination $LauncherExecutable }
+        Remove-RetiredExecutablesLater
         $leftovers = @(
             [IO.Path]::Combine($Paths.ClaudeDir, 'fuse'),
             $Paths.ShareDir,

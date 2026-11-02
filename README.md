@@ -171,7 +171,7 @@ On Windows the same files live under your user folder:
 | `%USERPROFILE%\.claude\themes\fuse.json`, `fuse-light.json` | the dark and light green themes |
 | `%USERPROFILE%\.local\share\fuse-code\` | a copy of these scripts, so refresh works even if you delete the clone |
 
-`fuse.exe` is a few lines of C# from `lib/FuseLauncher.cs`, compiled with the .NET Framework that ships with Windows. It passes your arguments to Claude Code exactly as you typed them, including `&`, `%` and multi-line prompts. If it can't be built, the installer says so and `fuse.cmd` takes over, which can't pass `&` or line breaks.
+`fuse.exe` is a few lines of C# from `lib/FuseLauncher.cs`, compiled with the .NET Framework that ships with Windows. It passes the arguments it receives to Claude Code unchanged, including `&`, `%` and multi-line prompts. (Windows PowerShell 5.1 itself still drops empty arguments and strips quotes inside an argument before any program sees them, so put prompts with quotes in a file or use PowerShell 7.) If it can't be built, the installer says so and `fuse.cmd` takes over, which can't pass `&` or line breaks.
 
 If `%USERPROFILE%\.local\bin` isn't on your user `PATH`, the installer adds it. That's also the folder the Claude Code installer uses, so this fixes `claude` not being found in new terminals too.
 

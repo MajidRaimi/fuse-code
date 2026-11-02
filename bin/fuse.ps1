@@ -37,6 +37,7 @@ function Read-LauncherConfig {
 function Get-LauncherArguments {
     param([AllowEmptyCollection()][string[]]$ScriptArguments)
     $forwarded = $env:FUSE_ARGUMENTS
+    [Environment]::SetEnvironmentVariable('FUSE_ARGUMENTS', $null, 'Process')
     if ($forwarded -and $forwarded.StartsWith($ExecutableArgumentsMarker, [StringComparison]::Ordinal)) {
         return , (ConvertFrom-CommandLine -CommandLine $forwarded.Substring($ExecutableArgumentsMarker.Length))
     }
@@ -44,7 +45,7 @@ function Get-LauncherArguments {
 }
 
 function Invoke-Claude {
-    param([Parameter(Mandatory)][string]$ClaudePath, [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$ArgumentList)
+    param([Parameter(Mandatory)][string]$ClaudePath, [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$ArgumentList)
     try {
         Invoke-NativeCommand -FilePath $ClaudePath -ArgumentList $ArgumentList
     }
