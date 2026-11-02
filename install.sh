@@ -303,7 +303,7 @@ probe_model() {
   local reference="$1" log="$2"
   (
     cd "$PROBE_DIR/work"
-    export FUSE_ENV_FILE="$PROBE_DIR/env" FUSE_SETTINGS_FILE="$PROBE_DIR/settings.json"
+    export FUSE_ENV_FILE="$PROBE_DIR/env" FUSE_SETTINGS_FILE="$PROBE_DIR/settings.json" FUSE_SKIP_SETTINGS_GUARD=1
     run_with_deadline "$PROBE_LAUNCHER" --model "$reference" --no-session-persistence \
       --strict-mcp-config --setting-sources project \
       -p "Reply with the single word ok" </dev/null >"$log" 2>&1

@@ -42,7 +42,8 @@ export ANTHROPIC_DEFAULT_SONNET_MODEL="${FUSE_SONNET_MODEL:-$FUSE_DEFAULT_MODEL}
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="${FUSE_SMALL_MODEL:-$FUSE_DEFAULT_MODEL}"
 export ANTHROPIC_SMALL_FAST_MODEL="$ANTHROPIC_DEFAULT_HAIKU_MODEL"
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-unset FUSE_API_KEY FUSE_ENV_FILE FUSE_SETTINGS_FILE
+readonly GUARD_ENABLED="$([[ "${FUSE_SKIP_SETTINGS_GUARD:-}" == 1 ]] && printf 0 || printf 1)"
+unset FUSE_API_KEY FUSE_ENV_FILE FUSE_SETTINGS_FILE FUSE_SKIP_SETTINGS_GUARD
 
 fuse_values() {
   jq -c --argjson themes "$FUSE_THEMES" \
@@ -73,7 +74,9 @@ guard_user_settings() {
 }
 
 FUSE_VALUES=""
-command -v jq >/dev/null && FUSE_VALUES="$(fuse_values 2>/dev/null || true)"
+if [[ "$GUARD_ENABLED" == 1 ]] && command -v jq >/dev/null; then
+  FUSE_VALUES="$(fuse_values 2>/dev/null || true)"
+fi
 guard_user_settings '{}'
 readonly BEFORE="$(user_choices)"
 trap 'guard_user_settings "$BEFORE"; exit 129' HUP

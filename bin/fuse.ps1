@@ -6,7 +6,8 @@ Import-Module ([IO.Path]::Combine($PayloadDir, 'lib', 'FuseCode.psm1'))
 
 $MaintenanceCommands = [string[]]@('--refresh-models', '--reset-models', '--self-update', '--uninstall')
 $ChoiceFreeFlags = [string[]]@('-p', '--print', '-v', '--version', '-h', '--help')
-$ClearedVariables = [string[]]@('ANTHROPIC_API_KEY', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'FUSE_API_KEY', 'FUSE_ENV_FILE', 'FUSE_SETTINGS_FILE')
+$ClearedVariables = [string[]]@('ANTHROPIC_API_KEY', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'FUSE_API_KEY', 'FUSE_ENV_FILE', 'FUSE_SETTINGS_FILE', 'FUSE_ARGUMENTS', 'FUSE_SKIP_SETTINGS_GUARD')
+$ExecutableArgumentsMarker = ':'
 
 function Stop-Fuse {
     param([Parameter(Mandatory)][string]$Message)
@@ -31,6 +32,26 @@ function Read-LauncherConfig {
     }
     if (-not $config['FUSE_DEFAULT_MODEL']) { Stop-Fuse 'FUSE_DEFAULT_MODEL is empty. Run fuse --refresh-models.' }
     $config
+}
+
+function Get-LauncherArguments {
+    param([AllowEmptyCollection()][string[]]$ScriptArguments)
+    $forwarded = $env:FUSE_ARGUMENTS
+    [Environment]::SetEnvironmentVariable('FUSE_ARGUMENTS', $null, 'Process')
+    if ($forwarded -and $forwarded.StartsWith($ExecutableArgumentsMarker, [StringComparison]::Ordinal)) {
+        return , (ConvertFrom-CommandLine -CommandLine $forwarded.Substring($ExecutableArgumentsMarker.Length))
+    }
+    , [string[]]$ScriptArguments
+}
+
+function Invoke-Claude {
+    param([Parameter(Mandatory)][string]$ClaudePath, [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$ArgumentList)
+    try {
+        Invoke-NativeCommand -FilePath $ClaudePath -ArgumentList $ArgumentList
+    }
+    catch [System.ArgumentException] {
+        Stop-Fuse $_.Exception.Message
+    }
 }
 
 function Clear-InheritedEnvironment {
@@ -75,7 +96,8 @@ function Start-SettingsWatcher {
     [System.Diagnostics.Process]::Start($startInfo).Dispose()
 }
 
-$arguments = [string[]]$args
+$arguments = Get-LauncherArguments -ScriptArguments ([string[]]$args)
+$guardEnabled = $env:FUSE_SKIP_SETTINGS_GUARD -cne '1'
 if ($arguments.Count -gt 0 -and $MaintenanceCommands -ccontains $arguments[0]) { exit (Invoke-Maintenance -Command $arguments[0]) }
 
 $paths = Get-FusePaths
@@ -92,19 +114,22 @@ $slots = [pscustomobject]@{
     Small  = Select-FirstValue @($config['FUSE_SMALL_MODEL'], $config['FUSE_DEFAULT_MODEL'])
 }
 $guard = New-SettingsGuard -UserSettingsPath $paths.UserSettings -FuseSettingsPath $fuseSettings -SlotModels @($slots.Main, $slots.Sonnet, $slots.Small)
-Invoke-SettingsCheck -Path $guard.Path -Action { Restore-UserSettings -Guard $guard -Previous @{} }
-$before = Invoke-SettingsCheck -Path $guard.Path -Action { Get-UserChoices -Guard $guard } -Fallback ([ordered]@{})
+$before = [ordered]@{}
+if ($guardEnabled) {
+    Invoke-SettingsCheck -Path $guard.Path -Action { Restore-UserSettings -Guard $guard -Previous @{} }
+    $before = Invoke-SettingsCheck -Path $guard.Path -Action { Get-UserChoices -Guard $guard } -Fallback ([ordered]@{})
+}
 
 Clear-InheritedEnvironment
 $mayChangeChoices = @($arguments | Where-Object { $ChoiceFreeFlags -ccontains $_ }).Count -eq 0
-if ($mayChangeChoices) { Invoke-SettingsCheck -Path $guard.Path -Action { Start-SettingsWatcher -Guard $guard -Previous $before } }
+if ($guardEnabled -and $mayChangeChoices) { Invoke-SettingsCheck -Path $guard.Path -Action { Start-SettingsWatcher -Guard $guard -Previous $before } }
 
 Set-SessionEnvironment -Config $config -Slots $slots
 $status = 1
 try {
-    $status = Invoke-NativeCommand -FilePath $claude -ArgumentList (@('--settings', $fuseSettings) + $arguments)
+    $status = Invoke-Claude -ClaudePath $claude -ArgumentList (@('--settings', $fuseSettings) + $arguments)
 }
 finally {
-    Invoke-SettingsCheck -Path $guard.Path -Action { Restore-UserSettings -Guard $guard -Previous $before }
+    if ($guardEnabled) { Invoke-SettingsCheck -Path $guard.Path -Action { Restore-UserSettings -Guard $guard -Previous $before } }
 }
 exit $status
