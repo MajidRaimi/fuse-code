@@ -19,6 +19,7 @@ $script:BroadcastWindow = [IntPtr]0xffff
 $script:SettingChangeMessage = [uint32]0x1A
 $script:AbortIfHungFlag = [uint32]2
 $script:BroadcastTimeoutMilliseconds = [uint32]1000
+$script:CapturedTextTimeoutMilliseconds = 10000
 
 function Test-WindowsHost {
     [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
@@ -549,9 +550,16 @@ function Wait-CapturedProcess {
     $Captured.Process.ExitCode
 }
 
+function Get-CompletedText {
+    param([Parameter(Mandatory)][System.Threading.Tasks.Task[string]]$Reader)
+    if ($Reader.IsCompleted) { return $Reader.Result }
+    ''
+}
+
 function Get-CapturedText {
     param([Parameter(Mandatory)]$Captured)
-    $Captured.Output.Result + "`n" + $Captured.Errors.Result
+    [void][System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]@($Captured.Output, $Captured.Errors), $script:CapturedTextTimeoutMilliseconds)
+    (Get-CompletedText -Reader $Captured.Output) + "`n" + (Get-CompletedText -Reader $Captured.Errors)
 }
 
 function Stop-ProcessTree {
