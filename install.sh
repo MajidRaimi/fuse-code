@@ -352,6 +352,7 @@ install() {
 refresh_models() {
   ensure_jq
   [[ -r "$ENV_FILE" ]] || die "fuse is not installed yet. Run ./install.sh first."
+  copy_payload
   configure "$1"
   say "Model list updated. Restart any open fuse sessions to see it."
 }
