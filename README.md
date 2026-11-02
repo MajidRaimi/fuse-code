@@ -54,6 +54,18 @@ $env:FUSE_API_KEY = "your-key"; .\install.cmd
 
 Then open a new terminal (PowerShell, Command Prompt or Windows Terminal) and run `fuse`.
 
+### Let Claude Code install it
+
+If you already use Claude Code, paste this into it and put your key in place of `YOUR_FUSE_API_KEY`:
+
+```text
+Install fuse-code for me by following the steps in
+https://raw.githubusercontent.com/MajidRaimi/fuse-code/main/AGENT_INSTALL.md
+My FUSE API key is: YOUR_FUSE_API_KEY
+```
+
+It works on Windows, macOS and Linux. Anything you paste into Claude Code is saved in its local session history and sent with the conversation. If you'd rather keep the key out of that, run the install command yourself instead.
+
 ### What you need
 
 - macOS, Linux, or Windows 10 (1809 or later) and Windows 11
