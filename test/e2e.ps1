@@ -268,7 +268,8 @@ function Assert-ClaudeReceived {
     $received = Read-FakeClaudeArguments -Decoder $Decoder
     $expectedJson = ConvertTo-Json -InputObject (@('--settings', $FuseSettings) + $Expected) -Compress
     $receivedJson = ConvertTo-Json -InputObject $received -Compress
-    Assert-True ($receivedJson -ceq $expectedJson) "claude received $receivedJson, expected $expectedJson"
+    $rawCommandLine = [IO.File]::ReadAllText([IO.Path]::Combine($TestHome, 'fake-claude-command-line.txt'))
+    Assert-True ($receivedJson -ceq $expectedJson) "claude received $receivedJson`nexpected $expectedJson`nraw command line: $rawCommandLine"
 }
 
 function Start-MockFuse {
