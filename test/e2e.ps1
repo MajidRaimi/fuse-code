@@ -383,7 +383,7 @@ try {
 
     Test-Case 'fuse.exe hands claude every argument unchanged' {
         Write-UserSettings '{"theme":"dark"}'
-        $arguments = $TrickyArguments + $MultilinePrompt
+        $arguments = @($TrickyArguments | Where-Object { $_ }) + $MultilinePrompt
         Assert-Succeeded (Invoke-Fuse -Arguments $arguments -Environment (Get-FakeClaudeEnvironment -ClaudeDir $FakeClaude.Exe)) 'fuse.exe with tricky arguments'
         Assert-ClaudeReceived -Expected $arguments
         $settings = Read-UserSettingsText | ConvertFrom-Json
