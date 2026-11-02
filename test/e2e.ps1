@@ -351,7 +351,7 @@ try {
         $session = Start-Captured -FilePath $FuseCommand -Environment @{ PATH = $isolatedPath } -WorkingDirectory $ProjectDir
         try {
             Wait-Until -TimeoutSeconds 90 -Message "the fake claude never picked a fuse model, user settings are $(Read-UserSettingsText)" -Condition { (Read-UserSettingsText).Contains('Kimi') }
-            $claudeArguments = @([IO.File]::ReadAllText([IO.Path]::Combine($TestHome, 'fake-claude-args.json')) | ConvertFrom-Json)
+            $claudeArguments = [string[]](ConvertFrom-Json -InputObject ([IO.File]::ReadAllText([IO.Path]::Combine($TestHome, 'fake-claude-args.json'))))
             Assert-True ($claudeArguments.Count -ge 2 -and $claudeArguments[0] -ceq '--settings' -and $claudeArguments[1] -ceq $FuseSettings) "claude was started with $($claudeArguments -join ' ')"
             $tree = @(Get-ProcessTree -RootId $session.Process.Id)
             $watcher = Find-ProcessByCommandLine -Processes $tree -Pattern 'fuse-guard\.ps1'
